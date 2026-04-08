@@ -5,7 +5,7 @@ import os
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from openai import OpenAI
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 
 Provider = Literal["openai", "claude"]
@@ -136,21 +136,40 @@ def _generate_agent_spec_openai(
         b64 = base64.b64encode(img_bytes).decode("utf-8")
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{b64}"})
 
-    resp = client.responses.create(
+    # Use Chat Completions JSON mode for broad SDK compatibility.
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": architect_input},
+    ]
+    if images:
+        # If images exist, append a short marker so text-only fallback still accounts for them.
+        image_names = ", ".join(name for name, _ in images)
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Referenced uploaded images are part of the brief and should influence the spec: "
+                    f"{image_names}"
+                ),
+            }
+        )
+
+    resp = client.chat.completions.create(
         model=model,
-        input=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": content},
-        ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": {"name": "agent_spec", "schema": schema, "strict": True},
-        },
+        messages=messages,
+        response_format={"type": "json_object"},
         temperature=0.5,
     )
 
-    raw = resp.output[0].content[0].text
-    data = json.loads(raw) if isinstance(raw, str) else raw
+    raw = resp.choices[0].message.content or "{}"
+    data = json.loads(raw)
+    # Enforce schema with Pydantic and a light normalization pass.
+    if "channels" not in data:
+        data["channels"] = []
+    if "abilities" not in data:
+        data["abilities"] = []
+    if "qualities" not in data:
+        data["qualities"] = []
     return AgentSpec(**data)
 
 

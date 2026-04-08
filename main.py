@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from architect import Provider, generate_agent_spec
 from provider_vapi import deploy_vapi_assistant, get_phone_number
-from supabase_client import create_deployed_agent
+from supabase_client import create_deployed_agent, ensure_deployed_agents_table, list_deployed_agents
 from runtime_agent import generate_chat_reply
 
 load_dotenv()  # Load .env so OPENAI_API_KEY and others are available
@@ -195,10 +195,10 @@ with col_left:
         )
 
         all_channels = st.checkbox(
-            "Deploy on all channels (Phone + Web)",
+            "Deploy on all channels (Phone + Telegram + WhatsApp + Instagram + LinkedIn + Web)",
             value=False,
         )
-        channel_options = ["phone", "web"]
+        channel_options = ["phone", "telegram", "whatsapp", "instagram", "linkedin", "web"]
         channels = (
             channel_options
             if all_channels
@@ -358,15 +358,21 @@ if deploy_clicked:
                 status.update(label="📞 Provisioning Phone Line...", state="running")
                 assistant_id = deploy_vapi_assistant(spec)
                 phone_number = get_phone_number(assistant_id)
+                st.session_state["assistant_id"] = assistant_id
+                st.session_state["last_spec"] = spec
+                print(f"[DEPLOY] assistant_id={assistant_id}")  # ensure visible in terminal logs
 
                 # Persist deployment
                 try:
+                    ensure_deployed_agents_table()
                     create_deployed_agent(assistant_id=assistant_id, business_name=spec.name)
                 except Exception as supa_err:  # noqa: BLE001
-                    st.warning(f"Deployed, but failed to save to Supabase: {supa_err}")
+                    st.warning(f"Deployed, but DB insert failed: {supa_err}")
 
                 status.update(label="🚀 Employee Deployed!", state="complete", expanded=False)
 
+                st.success("Assistant deployed successfully")
+                st.code(assistant_id)
                 st.success(f"Call Now: {phone_number}")
                 st.caption("Share this number with customers immediately.")
 
@@ -405,8 +411,7 @@ preview_provider: Provider = "openai" if preview_provider_label == "OpenAI" else
 
 spec_for_preview = None
 try:
-    # Prefer the most recently deployed spec if present (same variable name inside deploy flow).
-    spec_for_preview = locals().get("spec")  # type: ignore[assignment]
+    spec_for_preview = st.session_state.get("last_spec")
 except Exception:
     spec_for_preview = None
 
@@ -434,10 +439,33 @@ else:
         st.session_state["preview_history"].append({"role": "assistant", "content": reply})
 
 st.markdown("### Channel Webhooks (Next)")
-with st.expander("Enable external channels (WhatsApp / Instagram / LinkedIn)", expanded=False):
+with st.expander("Enable Telegram / WhatsApp / Instagram / LinkedIn", expanded=False):
     st.markdown(
         """
-WhatsApp/Instagram/LinkedIn can be wired next via dedicated webhook endpoints
-in `server.py`. For now, voice (Vapi.ai) and web chat are fully live.
+Telegram webhook is available at:
+- `/telegram/<assistant_id>`
+
+Run webhook server:
+```bash
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+Then expose it publicly and set Telegram webhook to:
+- `https://<your-public-host>/telegram/<assistant_id>`
+
+Also set:
+- `TELEGRAM_BOT_TOKEN` in `.env`
         """
     )
+
+st.markdown("### Deployed Agents")
+st.caption("All deployed assistant IDs saved in Supabase.")
+try:
+    ensure_deployed_agents_table()
+    deployed_agents_rows = list_deployed_agents(limit=200)
+    if deployed_agents_rows:
+        st.dataframe(deployed_agents_rows, use_container_width=True)
+    else:
+        st.info("No deployed agents found yet.")
+except Exception as e:  # noqa: BLE001
+    st.warning(f"Could not load deployed agents table: {e}")
