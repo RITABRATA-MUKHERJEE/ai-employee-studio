@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from architect import AgentSpec, Provider
 from runtime_agent import generate_chat_reply
+from supabase_client import get_telegram_chat_link, upsert_telegram_chat_link
 
 
 app = FastAPI(title="Agent Builder Studio — Webhooks")
@@ -51,11 +52,86 @@ def webchat(assistant_id: str, req: WebchatRequest) -> WebchatResponse:
     return WebchatResponse(reply=reply)
 
 
-@app.post("/telegram/{assistant_id}")
-def telegram_webhook(assistant_id: str, update: Dict[str, Any]) -> Dict[str, Any]:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+@app.post("/telegram")
+def telegram_master_webhook(update: Dict[str, Any]) -> Dict[str, Any]:
+    token = os.getenv("TELEGRAM_MASTER_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN is not set.")
+        raise HTTPException(status_code=500, detail="TELEGRAM_MASTER_BOT_TOKEN is not set.")
+
+    message = (update.get("message") or {}).get("text")
+    chat_id = (update.get("message") or {}).get("chat", {}).get("id")
+    if not message or not chat_id:
+        return {"ok": True, "ignored": True}
+
+    chat_id_str = str(chat_id)
+
+    # One-click flow: deep link is https://t.me/<master_bot>?start=assistant_<assistant_id>
+    if message.startswith("/start"):
+        parts = message.split(maxsplit=1)
+        payload = parts[1] if len(parts) > 1 else ""
+        if payload.startswith("assistant_"):
+            assistant_id = payload.removeprefix("assistant_").strip()
+            if assistant_id and assistant_id in REGISTRY:
+                upsert_telegram_chat_link(chat_id=chat_id_str, assistant_id=assistant_id)
+                resp = requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": "Connected successfully. You can now chat with your AI employee here.",
+                    },
+                    timeout=15,
+                )
+                if resp.status_code >= 400:
+                    raise HTTPException(status_code=500, detail=f"Telegram sendMessage failed: {resp.text}")
+                return {"ok": True, "linked": True, "assistant_id": assistant_id}
+
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": "This chat is not linked yet. Open Telegram from your deploy link in Streamlit first.",
+            },
+            timeout=15,
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=500, detail=f"Telegram sendMessage failed: {resp.text}")
+        return {"ok": True, "linked": False}
+
+    assistant_id = get_telegram_chat_link(chat_id=chat_id_str)
+    if not assistant_id:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": "No AI employee linked to this chat. Use the deploy link from Streamlit first.",
+            },
+            timeout=15,
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=500, detail=f"Telegram sendMessage failed: {resp.text}")
+        return {"ok": True, "linked": False}
+
+    spec = REGISTRY.get(assistant_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="Linked assistant_id is not registered on webhook server.")
+
+    reply = generate_chat_reply(spec=spec, user_message=message, provider="openai")
+    resp = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": reply},
+        timeout=15,
+    )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"Telegram sendMessage failed: {resp.text}")
+    return {"ok": True}
+
+
+@app.post("/telegram/{assistant_id}")
+def telegram_webhook_legacy(assistant_id: str, update: Dict[str, Any]) -> Dict[str, Any]:
+    """Backward-compatible endpoint for old setup."""
+    token = os.getenv("TELEGRAM_MASTER_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="TELEGRAM_MASTER_BOT_TOKEN is not set.")
 
     spec = REGISTRY.get(assistant_id)
     if not spec:
@@ -74,4 +150,4 @@ def telegram_webhook(assistant_id: str, update: Dict[str, Any]) -> Dict[str, Any
     )
     if resp.status_code >= 400:
         raise HTTPException(status_code=500, detail=f"Telegram sendMessage failed: {resp.text}")
-    return {"ok": True}
+    return {"ok": True, "legacy": True}

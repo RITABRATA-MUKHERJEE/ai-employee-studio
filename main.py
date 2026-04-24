@@ -1,5 +1,6 @@
 import os
 
+import requests
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -362,6 +363,18 @@ if deploy_clicked:
                 st.session_state["last_spec"] = spec
                 print(f"[DEPLOY] assistant_id={assistant_id}")  # ensure visible in terminal logs
 
+                # Register this assistant on webhook server for web + telegram routing.
+                webhook_server_url = (os.getenv("WEBHOOK_SERVER_URL") or "").rstrip("/")
+                if webhook_server_url:
+                    try:
+                        requests.post(
+                            f"{webhook_server_url}/register",
+                            json={"assistant_id": assistant_id, "spec": spec.model_dump()},
+                            timeout=15,
+                        )
+                    except Exception as reg_err:  # noqa: BLE001
+                        st.warning(f"Assistant deployed, but webhook registration failed: {reg_err}")
+
                 # Persist deployment
                 try:
                     ensure_deployed_agents_table()
@@ -442,8 +455,8 @@ st.markdown("### Channel Webhooks (Next)")
 with st.expander("Enable Telegram / WhatsApp / Instagram / LinkedIn", expanded=False):
     st.markdown(
         """
-Telegram webhook is available at:
-- `/telegram/<assistant_id>`
+One-click Telegram (shared master bot) webhook is available at:
+- `/telegram`
 
 Run webhook server:
 ```bash
@@ -451,12 +464,26 @@ python -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 Then expose it publicly and set Telegram webhook to:
-- `https://<your-public-host>/telegram/<assistant_id>`
+- `https://<your-public-host>/telegram`
 
 Also set:
-- `TELEGRAM_BOT_TOKEN` in `.env`
+- `TELEGRAM_MASTER_BOT_TOKEN` in `.env`
+- `TELEGRAM_MASTER_BOT_USERNAME` in `.env`
+- `WEBHOOK_SERVER_URL` in `.env` (for auto-register)
         """
     )
+
+st.markdown("### Telegram One-Click Deploy")
+master_bot_username = (os.getenv("TELEGRAM_MASTER_BOT_USERNAME") or "").lstrip("@")
+assistant_id_for_tg = st.session_state.get("assistant_id")
+if not assistant_id_for_tg:
+    st.info("Deploy an AI employee first, then generate a one-click Telegram link.")
+elif not master_bot_username:
+    st.warning("Set TELEGRAM_MASTER_BOT_USERNAME in your .env to generate Telegram deep links.")
+else:
+    deep_link = f"https://t.me/{master_bot_username}?start=assistant_{assistant_id_for_tg}"
+    st.success("Telegram link ready. Share this with the business owner.")
+    st.code(deep_link)
 
 st.markdown("### Deployed Agents")
 st.caption("All deployed assistant IDs saved in Supabase.")
