@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Dict, List, Sequence
 
 from openai import OpenAI
 
@@ -106,4 +106,3 @@ def generate_chat_reply(
 
 
 __all__ = ["generate_chat_reply"]
-

@@ -1,0 +1,11 @@
+streamlit
+requests
+python-dotenv
+pydantic
+openai
+supabase
+anthropic
+pypdf
+python-docx
+python-pptx
+pillow

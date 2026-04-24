@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import logging
 import os
+from pathlib import Path
 from typing import Any, Dict
 
 import requests
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from architect import AgentSpec, Provider
 from runtime_agent import generate_chat_reply
 from supabase_client import get_telegram_chat_link, upsert_telegram_chat_link
 
+load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-app = FastAPI(title="Agent Builder Studio — Webhooks")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
 
 # In-memory registry for local dev. For production, back this by Supabase/Redis.
 REGISTRY: Dict[str, AgentSpec] = {}
@@ -32,14 +40,20 @@ class WebchatResponse(BaseModel):
     reply: str
 
 
+@app.get("/")
+def health() -> Dict[str, str]:
+    return {"status": "running"}
+
+
 @app.get("/health")
-def health() -> Dict[str, Any]:
+def health_detail() -> Dict[str, Any]:
     return {"ok": True, "registered": len(REGISTRY)}
 
 
 @app.post("/register")
 def register(req: RegisterRequest) -> Dict[str, Any]:
     REGISTRY[req.assistant_id] = req.spec
+    logger.info("Registered assistant_id=%s", req.assistant_id)
     return {"ok": True, "assistant_id": req.assistant_id}
 
 
@@ -53,7 +67,8 @@ def webchat(assistant_id: str, req: WebchatRequest) -> WebchatResponse:
 
 
 @app.post("/telegram")
-def telegram_master_webhook(update: Dict[str, Any]) -> Dict[str, Any]:
+async def telegram_webhook(request: Request) -> Dict[str, Any]:
+    update = await request.json()
     token = os.getenv("TELEGRAM_MASTER_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise HTTPException(status_code=500, detail="TELEGRAM_MASTER_BOT_TOKEN is not set.")

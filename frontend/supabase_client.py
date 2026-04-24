@@ -22,10 +22,15 @@ class DeployedAgent(BaseModel):
 
 def get_supabase_client() -> Client:
     url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    key = (
+        os.getenv("SUPABASE_KEY")
+        or os.getenv("SUPABASE_ANON_KEY")
+        or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    )
     if not url or not key:
         raise RuntimeError(
-            "Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY (or SUPABASE_PUBLISHABLE_KEY)."
+            "Supabase is not configured. Set SUPABASE_URL and SUPABASE_KEY "
+            "(or SUPABASE_ANON_KEY / SUPABASE_PUBLISHABLE_KEY)."
         )
     return create_client(url, key)
 
@@ -33,7 +38,6 @@ def get_supabase_client() -> Client:
 def create_booking(booking: Booking) -> Dict[str, Any]:
     """Insert a booking into the mock `bookings` table."""
     supabase = get_supabase_client()
-    # Expects a `bookings` table with matching columns.
     res = supabase.table("bookings").insert(booking.model_dump()).execute()
     if getattr(res, "error", None):
         raise RuntimeError(f"Supabase booking insert failed: {res.error}")
@@ -80,7 +84,6 @@ create table if not exists deployed_agents (
     except Exception:
         pass
 
-    # Try common SQL RPC helper names used in many projects.
     for fn_name in ("exec_sql", "execute_sql", "run_sql"):
         try:
             supabase.rpc(fn_name, {"sql": create_sql}).execute()
@@ -181,4 +184,3 @@ __all__ = [
     "upsert_telegram_chat_link",
     "get_telegram_chat_link",
 ]
-

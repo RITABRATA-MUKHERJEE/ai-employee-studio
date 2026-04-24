@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import requests
 import streamlit as st
@@ -9,7 +10,11 @@ from provider_vapi import deploy_vapi_assistant, get_phone_number
 from supabase_client import create_deployed_agent, ensure_deployed_agents_table, list_deployed_agents
 from runtime_agent import generate_chat_reply
 
-load_dotenv()  # Load .env so OPENAI_API_KEY and others are available
+_root = Path(__file__).resolve().parent.parent
+load_dotenv(_root / ".env")
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+BASE_URL = (os.getenv("BACKEND_URL") or os.getenv("WEBHOOK_SERVER_URL") or "").rstrip("/")
 
 st.set_page_config(page_title="AI Employee Studio", page_icon="🧱", layout="wide")
 
@@ -137,6 +142,15 @@ st.markdown(
 )
 st.caption("Describe your business and ideal hire. Agent Builder Studio turns that into a voice-ready, tool-aware assistant.")
 
+if BASE_URL:
+    try:
+        ping = requests.get(f"{BASE_URL}/", timeout=5)
+        st.caption(f"Backend API (`BACKEND_URL`): **{BASE_URL}** — status `{ping.json().get('status', ping.status_code)}`")
+    except Exception:
+        st.caption(f"Backend API (`BACKEND_URL`): **{BASE_URL}** — unreachable (check deployment and env).")
+else:
+    st.caption("Set **BACKEND_URL** to your API origin (e.g. `https://api.yourdomain.com`) for Telegram registration and webhooks.")
+
 col_left, col_right = st.columns([2.1, 1.2], gap="large")
 
 with col_left:
@@ -246,6 +260,7 @@ with col_right:
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("---")
+
 
 def _extract_text_from_uploads(files):
     extracted_chunks = []
@@ -363,19 +378,16 @@ if deploy_clicked:
                 st.session_state["last_spec"] = spec
                 print(f"[DEPLOY] assistant_id={assistant_id}")  # ensure visible in terminal logs
 
-                # Register this assistant on webhook server for web + telegram routing.
-                webhook_server_url = (os.getenv("WEBHOOK_SERVER_URL") or "").rstrip("/")
-                if webhook_server_url:
+                if BASE_URL:
                     try:
                         requests.post(
-                            f"{webhook_server_url}/register",
+                            f"{BASE_URL}/register",
                             json={"assistant_id": assistant_id, "spec": spec.model_dump()},
                             timeout=15,
                         )
                     except Exception as reg_err:  # noqa: BLE001
                         st.warning(f"Assistant deployed, but webhook registration failed: {reg_err}")
 
-                # Persist deployment
                 try:
                     ensure_deployed_agents_table()
                     create_deployed_agent(assistant_id=assistant_id, business_name=spec.name)
@@ -407,7 +419,6 @@ if deploy_clicked:
             except Exception as e:  # noqa: BLE001
                 st.error(f"Failed to deploy: {e}")
 
-# Web channel: instant preview chat inside Streamlit (no extra setup)
 st.markdown("### Web Chat Preview")
 st.caption("Test your agent instantly in-browser. This powers the “web” channel behavior.")
 
@@ -456,20 +467,26 @@ with st.expander("Enable Telegram / WhatsApp / Instagram / LinkedIn", expanded=F
     st.markdown(
         """
 One-click Telegram (shared master bot) webhook is available at:
-- `/telegram`
+- `{BACKEND_URL}/telegram` (substitute your deployed API origin)
 
-Run webhook server:
+From the **backend** service directory, run:
 ```bash
-python -m uvicorn server:app --host 0.0.0.0 --port 8000
+cd backend
+python -m pip install -r requirements.txt
+python -m uvicorn server:app --host 0.0.0.0 --port 8080
 ```
 
-Then expose it publicly and set Telegram webhook to:
-- `https://<your-public-host>/telegram`
+On AWS App Runner, set the start command to:
+`uvicorn server:app --host 0.0.0.0 --port 8080`
 
-Also set:
-- `TELEGRAM_MASTER_BOT_TOKEN` in `.env`
-- `TELEGRAM_MASTER_BOT_USERNAME` in `.env`
-- `WEBHOOK_SERVER_URL` in `.env` (for auto-register)
+Expose your API at **api.yourdomain.com**, then set the Telegram webhook to:
+- `https://api.yourdomain.com/telegram`
+
+Set in your environment (never commit secrets):
+- `TELEGRAM_MASTER_BOT_TOKEN`
+- `TELEGRAM_MASTER_BOT_USERNAME` (for Streamlit deep links)
+- `BACKEND_URL` (this UI — e.g. `https://api.yourdomain.com`)
+- `SUPABASE_URL` and `SUPABASE_KEY`
         """
     )
 
